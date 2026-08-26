@@ -1,61 +1,93 @@
 // ============================================================================
-//  TASK 3.2-3.5 — MAIN ACTIVITY · man hinh grade tuan 3
-//  Bo cuc: player (+scopes) → hang preset/chon video → hang Copy/Paste/KF
-//  → GALLERY clip cuon ngang → panel ColorSliders.
-//  Moi clip giu GradeState rieng (GradeManager); slider dong bo 2 chieu voi
-//  preset JSON; keyframing noi suy theo presentationTime tu decoder.
+//  MAIN ACTIVITY — man hinh grade (GIAI DOAN 1 cua viec chuyen sang Media3)
+//
+//  Duong hinh anh MOI:
+//      ExoPlayer -> DefaultVideoFrameProcessor (GL ES)
+//                -> GradeGlEffect  (CST + Layer 1 + LUT + Layer 3)
+//                -> ClarityGlEffect
+//                -> SurfaceView trong ComposeView
+//  Tham so mau di qua GradeBus (UI ghi -> GL thread doc), nen keo slider la
+//  doi ngay ca khi video dang tam dung — Media3 ve lai khung hien tai.
+//
+//  CON LAI TREN DUONG VULKAN (chua chuyen): xuat file (BatchExporter),
+//  Scopes (compute shader) va watermark preview. Xem ghi chu o startExport().
 // ============================================================================
 package com.freedive.colorapp
 
 import android.net.Uri
 import android.os.Bundle
-import android.view.Gravity
-import android.widget.Button
-import android.widget.FrameLayout
+import android.os.Handler
+import android.os.Looper
+import android.view.View
 import android.widget.LinearLayout
+import android.widget.PopupMenu
+import android.widget.ProgressBar
 import android.widget.ScrollView
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
-import android.os.Handler
-import android.os.Looper
-import android.view.MotionEvent
-import android.widget.ProgressBar
-import com.freedive.colorapp.decoder.MediaCodecEngine
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.ComposeView
+import androidx.media3.common.util.UnstableApi
 import com.freedive.colorapp.export.BatchExporter
 import com.freedive.colorapp.grade.DraftStore
 import com.freedive.colorapp.grade.GradeManager
 import com.freedive.colorapp.grade.KeyframeController
 import com.freedive.colorapp.grade.PresetLoader
 import com.freedive.colorapp.guide.SmartGuideManager
+import com.freedive.colorapp.player.GradeBus
+import com.freedive.colorapp.player.GradePlayer
 import com.freedive.colorapp.ui.ClipGalleryView
 import com.freedive.colorapp.ui.ColorSliders
-import com.freedive.colorapp.ui.ScopesPopupView
-import com.freedive.colorapp.ui.VideoPlayerView
+import com.freedive.colorapp.ui.L
+import com.freedive.colorapp.ui.Theme
+import com.freedive.colorapp.ui.compose.GradePlayerScreen
 
+@UnstableApi
 class MainActivity : ComponentActivity() {
 
-    private lateinit var playerView: VideoPlayerView
-    private lateinit var scopesView: ScopesPopupView
+    private lateinit var gradePlayer: GradePlayer
     private lateinit var sliders: ColorSliders
-    private val smartGuide = SmartGuideManager()          // Task S1 — Smart Guide
+    private val smartGuide = SmartGuideManager()
     private lateinit var gallery: ClipGalleryView
     private lateinit var gradeManager: GradeManager
     private lateinit var draftStore: DraftStore
     private lateinit var batchExporter: BatchExporter
     private lateinit var exportBar: ProgressBar
-    private lateinit var lutRepo: com.freedive.colorapp.lut.LutRepository       // Task E4
-    private lateinit var lutLibrary: com.freedive.colorapp.lut.LutLibraryView   // Task E4
-    // Task E1/E2/E3 — hang tuy chon xuat
-    private lateinit var optAvc: android.widget.ToggleButton
-    private lateinit var optFps60: android.widget.ToggleButton
-    private lateinit var optSlowMo: android.widget.ToggleButton
-    private lateinit var optMute: android.widget.ToggleButton
-    private lateinit var optWatermark: android.widget.ToggleButton
-    private var watermarkLoaded = false
+    private lateinit var lutRepo: com.freedive.colorapp.lut.LutRepository
+    private lateinit var lutLibrary: com.freedive.colorapp.lut.LutLibraryView
+
+    // ---- Tuy chon xuat (gom vao menu ⋮) ----
+    private var optAvc = false
+    private var optFps60 = false
+    private var optSlowMo = false
+    private var optMute = true
+    private var optWatermark = false
+    private lateinit var exportSummary: TextView
+
+    private val presetChips = mutableListOf<TextView>()
+    private lateinit var kfPlayChip: TextView
+
     private val keyframes = KeyframeController()
-    private var engine: MediaCodecEngine? = null
     private var currentUri: Uri? = null
+
+    // Keyframing: truoc day nhan tick tu decoder. Nay hoi vi tri cua ExoPlayer.
+    private val kfHandler = Handler(Looper.getMainLooper())
+    private val kfTick = object : Runnable {
+        override fun run() {
+            // Thoi luong chi biet duoc sau khi ExoPlayer prepare xong, nen cap
+            // nhat o day thay vi ngay luc mo clip.
+            val dur = gradePlayer.player.duration
+            if (dur > 0) keyframes.setDuration(dur * 1000L)
+            if (keyframes.enabled && dur > 0 && gradePlayer.player.isPlaying) {
+                keyframes.onFrame(gradePlayer.player.currentPosition * 1000L)
+                    ?.let { GradeBus.push(it) }
+            }
+            kfHandler.postDelayed(this, 40)
+        }
+    }
 
     private val pickVideo =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
@@ -68,319 +100,288 @@ class MainActivity : ComponentActivity() {
             draftStore.scheduleSave(gallery.allClips(), gradeManager.snapshot())
         }
 
-    // TASK E4 (spec 4.4.1) — BATCH IMPORT .cube: chon NHIEU file cung luc qua SAF.
-    // MIME cua .cube thuong la application/octet-stream (spec 4.2.1).
     private val pickLuts =
         registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
             if (uris.isNullOrEmpty()) return@registerForActivityResult
             val imported = lutRepo.import(uris)
-            toast(if (imported.isEmpty()) "Khong nhap duoc file .cube hop le"
-                  else "Da nhap ${imported.size} LUT vao thu vien")
+            toast(if (imported.isEmpty())
+                      L.t("Không nhập được file .cube hợp lệ", "No valid .cube file imported")
+                  else L.t("Đã nhập ${imported.size} LUT vào thư viện",
+                           "Imported ${imported.size} LUT(s)"))
             lutLibrary.refresh()
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        L.init(this)
         gradeManager = GradeManager(this)
         draftStore = DraftStore(this)
-        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        gradePlayer = GradePlayer(this)
 
-        // ---- Player + scopes overlay + nut cycle ----
-        val playerArea = FrameLayout(this)
-        playerView = VideoPlayerView(this)
-        scopesView = ScopesPopupView(this)
-        playerArea.addView(playerView, mp())
-        playerArea.addView(scopesView, mp())
-        // TASK 5.3 — Before/After: nhan giu player (>=200ms) = xem anh goc
-        val holdHandler = Handler(Looper.getMainLooper())
-        val holdOn = Runnable { NativeBridge.setBypassGrade(true) }
-        playerView.setOnTouchListener { _, e ->
-            when (e.actionMasked) {
-                MotionEvent.ACTION_DOWN -> { holdHandler.postDelayed(holdOn, 200); true }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    holdHandler.removeCallbacks(holdOn)
-                    NativeBridge.setBypassGrade(false); true
-                }
-                else -> false
-            }
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Theme.BG)
         }
-        playerArea.addView(Button(this).apply {
-            text = "📊"; alpha = 0.75f
-            setOnClickListener { scopesView.cycleMode() }
-        }, FrameLayout.LayoutParams(wc(), wc(), Gravity.END or Gravity.CENTER_VERTICAL))
-        root.addView(playerArea, LinearLayout.LayoutParams(mpv(), 0, 1f))
 
-        // ---- Hang 1: chon video + 5 preset (dong bo slider tu JSON) ----
-        val presetRow = LinearLayout(this)
-        presetRow.addView(Button(this).apply {
-            text = "🎬"
-            setOnClickListener { pickVideo.launch(arrayOf("video/*")) }
-        }, rowLp(0.8f))
-        listOf("PQ", "Cyan", "Deep", "Indo", "Soc").forEachIndexed { i, name ->
-            presetRow.addView(Button(this).apply {
-                text = name
-                setOnClickListener { applyPreset(i) }
-            }, rowLp(1f))
+        // ============ 1. PLAYER (Compose: mat phat + dieu khien) ============
+        val playerHost = ComposeView(this).apply {
+            setContent { GradePlayerScreen(gradePlayer, Modifier.fillMaxSize()) }
         }
-        root.addView(presetRow)
+        root.addView(playerHost, LinearLayout.LayoutParams(mpv(), 0, 1f))
 
-        // ---- Hang 2: Copy/Paste Attributes + Keyframing ----
-        val opsRow = LinearLayout(this)
-        opsRow.addView(Button(this).apply {
-            text = "⧉ Copy"
-            setOnClickListener {
-                val uri = currentUri ?: return@setOnClickListener toast("Chua co clip")
-                if (gradeManager.copyAttributes(uri)) toast("Da copy 3 layer ra clipboard")
-            }
-        }, rowLp(1f))
-        opsRow.addView(Button(this).apply {
-            text = "⇶ Paste All"
-            setOnClickListener {
-                if (!gradeManager.hasClipboard()) return@setOnClickListener toast("Clipboard trong")
-                val targets = gallery.selectedClips().ifEmpty { gallery.allClips().toSet() }
-                val n = gradeManager.pasteToAll(targets, currentUri)
-                toast("Da ap grade cho $n clip")
-            }
-        }, rowLp(1f))
-        opsRow.addView(Button(this).apply {
-            text = "◧ KF dau"
-            setOnClickListener { keyframes.setStartKeyframe(sliders.grade); toast("KF dau da ghi") }
-        }, rowLp(1f))
-        opsRow.addView(Button(this).apply {
-            text = "◨ KF cuoi"
-            setOnClickListener { keyframes.setEndKeyframe(sliders.grade); toast("KF cuoi da ghi") }
-        }, rowLp(1f))
-        opsRow.addView(Button(this).apply {
-            text = "KF ▶"
-            setOnClickListener {
-                if (!keyframes.hasBoth()) return@setOnClickListener toast("Can du 2 keyframe")
-                keyframes.enabled = !keyframes.enabled
-                text = if (keyframes.enabled) "KF ■" else "KF ▶"
-                toast(if (keyframes.enabled) "Keyframing BAT — grade doi theo tien trinh clip"
-                      else "Keyframing tat")
-            }
-        }, rowLp(1f))
-        root.addView(opsRow)
+        // ============ 2. KHU DIEU KHIEN ============
+        val controls = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(Theme.dp(this@MainActivity, 12), Theme.dp(this@MainActivity, 8),
+                       Theme.dp(this@MainActivity, 12), Theme.dp(this@MainActivity, 4))
+        }
 
-        // ---- Task E4: LUT LIBRARY (an/hien bang nut 🎨 o hang preset) ----
+        controls.addView(Theme.sectionLabel(this, L.t("Preset màu", "Color presets")))
+        val (presetScroll, presetRow) = Theme.strip(this)
+        presetRow.addView(Theme.chip(this, L.t("🎬  Chọn video", "🎬  Pick video")) {
+            pickVideo.launch(arrayOf("video/*"))
+        }, Theme.gapLp(this))
+        listOf("PQ", "Cyan", "Deep", "Indo", L.t("Sốc", "Punch")).forEachIndexed { i, name ->
+            val ch = Theme.chip(this, name) { applyPreset(i) }
+            presetChips += ch
+            presetRow.addView(ch, Theme.gapLp(this))
+        }
+        presetRow.addView(Theme.chip(this, L.t("🎨  Thư viện LUT", "🎨  LUT library")) {
+            lutLibrary.visibility =
+                if (lutLibrary.visibility == View.GONE) View.VISIBLE else View.GONE
+        }, Theme.gapLp(this))
+        presetRow.addView(Theme.chip(this, L.switchLabel()) {
+            L.set(this, !L.isVi)
+            recreate()
+        }, Theme.gapLp(this))
+        controls.addView(presetScroll)
+
+        controls.addView(Theme.sectionLabel(this,
+            L.t("Sao chép & Keyframe", "Copy & Keyframe")))
+        val (toolScroll, toolRow) = Theme.strip(this)
+        toolRow.addView(Theme.chip(this, L.t("⧉  Copy grade", "⧉  Copy grade")) {
+            val uri = currentUri ?: return@chip toast(L.t("Chưa có clip", "No clip loaded"))
+            if (gradeManager.copyAttributes(uri))
+                toast(L.t("Đã copy 3 layer ra clipboard", "Copied all 3 layers to clipboard"))
+        }, Theme.gapLp(this))
+        toolRow.addView(Theme.chip(this, L.t("⇶  Dán hàng loạt", "⇶  Paste to all")) {
+            if (!gradeManager.hasClipboard())
+                return@chip toast(L.t("Clipboard trống", "Clipboard is empty"))
+            val targets = gallery.selectedClips().ifEmpty { gallery.allClips().toSet() }
+            val n = gradeManager.pasteToAll(targets, currentUri)
+            toast(L.t("Đã áp grade cho $n clip", "Applied grade to $n clip(s)"))
+        }, Theme.gapLp(this))
+        toolRow.addView(Theme.chip(this, L.t("◧  KF đầu", "◧  Start KF")) {
+            keyframes.setStartKeyframe(sliders.grade)
+            toast(L.t("Đã ghi keyframe đầu", "Start keyframe saved"))
+        }, Theme.gapLp(this))
+        toolRow.addView(Theme.chip(this, L.t("◨  KF cuối", "◨  End KF")) {
+            keyframes.setEndKeyframe(sliders.grade)
+            toast(L.t("Đã ghi keyframe cuối", "End keyframe saved"))
+        }, Theme.gapLp(this))
+        kfPlayChip = Theme.chip(this, L.t("▶  Bật keyframe", "▶  Enable keyframes"),
+            accentWhenOn = Theme.WARN) {
+            if (!keyframes.hasBoth())
+                return@chip toast(L.t("Cần đủ 2 keyframe", "Need both keyframes"))
+            keyframes.enabled = !keyframes.enabled
+            kfPlayChip.text = if (keyframes.enabled) L.t("■  Tắt keyframe", "■  Disable keyframes")
+                              else L.t("▶  Bật keyframe", "▶  Enable keyframes")
+            Theme.setChipOn(this, kfPlayChip, keyframes.enabled, Theme.WARN)
+            toast(if (keyframes.enabled)
+                      L.t("Keyframing BẬT — grade đổi theo tiến trình clip",
+                          "Keyframing ON — grade follows clip progress")
+                  else L.t("Keyframing tắt", "Keyframing off"))
+        }
+        toolRow.addView(kfPlayChip, Theme.gapLp(this))
+        controls.addView(toolScroll)
+        root.addView(controls)
+
+        // ---- Thu vien LUT ----
         lutRepo = com.freedive.colorapp.lut.LutRepository(this)
         lutLibrary = com.freedive.colorapp.lut.LutLibraryView(this).apply {
-            visibility = android.view.View.GONE
+            visibility = View.GONE
             onImportClick = {
                 pickLuts.launch(arrayOf("application/octet-stream", "text/plain", "*/*"))
             }
             onLutSelected = { path ->
-                sliders.grade.lutPath = path               // vao GradeState -> JSON/draft
+                sliders.grade.lutPath = path
                 currentUri?.let { gradeManager.put(it, sliders.grade) }
+                GradeBus.push(sliders.grade)          // GL thread nap lai texture 3D
                 toast("LUT: ${java.io.File(path).nameWithoutExtension}")
             }
         }
-        presetRow.addView(Button(this).apply {
-            text = "🎨"
-            setOnClickListener {
-                lutLibrary.visibility = if (lutLibrary.visibility == android.view.View.GONE)
-                    android.view.View.VISIBLE else android.view.View.GONE
-            }
-        }, rowLp(0.8f))
         root.addView(lutLibrary)
 
-        // ---- Task E1/E2/E3: HANG TUY CHON XUAT (codec/fps/slow-mo/audio/logo) ----
-        val optRow = LinearLayout(this)
-        fun optToggle(on: String, off: String, checked: Boolean) =
-            android.widget.ToggleButton(this).apply {
-                textOn = on; textOff = off; isChecked = checked
-            }
-        optAvc = optToggle("H.264 8-bit", "HEVC 10-bit", false)
-        optFps60 = optToggle("60 fps", "FPS nguon", false)
-        optSlowMo = optToggle("🐢 Slow-Mo x2", "Toc do thuong", false)
-        optMute = optToggle("🔇 Mute", "🔊 Audio goc", true)
-        optWatermark = optToggle("💧 Logo BAT", "Logo", false)
-        optWatermark.setOnCheckedChangeListener { _, v ->
-            if (v) ensureWatermarkLoaded()
-            NativeBridge.setWatermarkEnabled(v)            // xem truoc ngay trong preview
-        }
-        listOf(optAvc, optFps60, optSlowMo, optMute, optWatermark).forEach {
-            optRow.addView(it, rowLp(1f))
-        }
-        root.addView(optRow)
+        // ============ 3. GALLERY ============
+        gallery = ClipGalleryView(this).apply { onClipSelected = { uri -> selectClip(uri) } }
+        root.addView(gallery)
 
-        // ---- Hang 3: XUAT FILE (Task 4.1/4.3) + progress ----
-        batchExporter = BatchExporter(this, gradeManager)
-        val exportRow = LinearLayout(this)
-        exportRow.addView(Button(this).apply {
-            text = "⇪ Xuat clip nay"
-            setOnClickListener {
-                val uri = currentUri ?: return@setOnClickListener toast("Chua co clip")
-                startExport(listOf(uri))
+        // ============ 4. PANEL SLIDER ============
+        sliders = ColorSliders(this).apply {
+            onUserTouch = { }
+            onGradeChanged = { g ->
+                currentUri?.let { gradeManager.put(it, g) }
+                draftStore.scheduleSave(gallery.allClips(), gradeManager.snapshot())
+                smartGuide.onGradeChanged(g)
+                GradeBus.push(g)                      // -> shader GL, ap ngay
             }
-        }, rowLp(1f))
-        exportRow.addView(Button(this).apply {
-            text = "⇪ Xuat TAT CA"
-            setOnClickListener {
-                val clips = gallery.allClips()
-                if (clips.isEmpty()) return@setOnClickListener toast("Gallery trong")
-                startExport(clips)
-            }
-        }, rowLp(1f))
-        root.addView(exportRow)
+            onProGuideToggle = { on -> smartGuide.setProMode(on) }
+        }
+        smartGuide.onStateChanged = { st -> runOnUiThread { sliders.setGuideState(st) } }
+        sliders.setGuideState(smartGuide.state.value)
+        root.addView(ScrollView(this).apply {
+            overScrollMode = View.OVER_SCROLL_NEVER
+            addView(sliders)
+        }, LinearLayout.LayoutParams(mpv(), 0, 1.25f))
+
+        // ============ 5. THANH DUOI ============
         exportBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
-            max = 100; visibility = android.view.View.GONE
+            max = 100; visibility = View.GONE
         }
         root.addView(exportBar)
 
-        // ---- Gallery clip (Task 3.2) ----
-        gallery = ClipGalleryView(this).apply {
-            onClipSelected = { uri -> selectClip(uri) }
+        batchExporter = BatchExporter(this, gradeManager)
+        val bottom = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Theme.SURFACE)
+            setPadding(Theme.dp(this@MainActivity, 12), Theme.dp(this@MainActivity, 8),
+                       Theme.dp(this@MainActivity, 12), Theme.dp(this@MainActivity, 12))
         }
-        root.addView(gallery)
-
-        // ---- Panel slider ----
-        sliders = ColorSliders(this).apply {
-            onUserTouch = { scopesView.onColorSliderTouched() }
-            onGradeChanged = { g ->
-                currentUri?.let { gradeManager.put(it, g) }
-                draftStore.scheduleSave(gallery.allClips(), gradeManager.snapshot())  // Task 5.2
-                smartGuide.onGradeChanged(g)                                          // Task S1
-            }
-            onProGuideToggle = { on -> smartGuide.setProMode(on) }                    // Task S1
+        exportSummary = TextView(this).apply {
+            typeface = Theme.MONO
+            textSize = 11f
+            setTextColor(Theme.TEXT_DIM)
+            setPadding(0, 0, 0, Theme.dp(this@MainActivity, 8))
         }
-        // Task S1 — Smart Guide: goi y slider ke tiep tren panel (View-based, QD14)
-        smartGuide.onStateChanged = { st -> runOnUiThread { sliders.setGuideState(st) } }
-        sliders.setGuideState(smartGuide.state.value)     // trang thai khoi dau (buoc 1)
-        root.addView(ScrollView(this).apply { addView(sliders) },
-            LinearLayout.LayoutParams(mpv(), (resources.displayMetrics.heightPixels * 0.38f).toInt()))
+        bottom.addView(exportSummary)
 
+        val actionRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        actionRow.addView(Theme.primary(this, L.t("⇪  Xuất clip này", "⇪  Export this clip")) {
+            val uri = currentUri ?: return@primary toast(L.t("Chưa có clip", "No clip loaded"))
+            startExport(listOf(uri))
+        }, LinearLayout.LayoutParams(0, wc(), 1f))
+        actionRow.addView(View(this), LinearLayout.LayoutParams(Theme.dp(this, 8), 1))
+        val moreBtn = Theme.ghost(this, "⋮") { }
+        moreBtn.setOnClickListener { showMoreMenu(moreBtn) }
+        actionRow.addView(moreBtn, LinearLayout.LayoutParams(wc(), wc()))
+        bottom.addView(actionRow)
+        root.addView(bottom)
+
+        updateExportSummary()
         setContentView(root)
+        kfHandler.post(kfTick)
 
-        // TASK 5.2 — khoi phuc draft (ke ca sau khi app bi kill)
         draftStore.load()?.let { (clips, grades) ->
             gradeManager.restore(grades)
             clips.forEach { gallery.addClip(it) }
-            if (clips.isNotEmpty()) toast("Da khoi phuc ${clips.size} clip tu phien truoc")
+            if (clips.isNotEmpty())
+                toast(L.t("Đã khôi phục ${clips.size} clip từ phiên trước",
+                          "Restored ${clips.size} clip(s) from last session"))
         }
     }
 
-    override fun onPause() {
-        draftStore.saveNow(gallery.allClips(), gradeManager.snapshot())   // Task 5.2
-        super.onPause()
+    // ------------------------------------------------------------------------
+    private fun showMoreMenu(anchor: View) {
+        val m = PopupMenu(this, anchor)
+        val mn = m.menu
+        mn.add(0, 1, 0, if (optAvc) "Codec: H.264 8-bit" else "Codec: HEVC 10-bit")
+        mn.add(0, 2, 1, if (optFps60) L.t("Khung hình: 60 fps", "Frame rate: 60 fps")
+                        else L.t("Khung hình: theo nguồn", "Frame rate: source"))
+        mn.add(0, 3, 2, if (optSlowMo) L.t("Tốc độ: Slow-Mo ×2", "Speed: Slow-Mo ×2")
+                        else L.t("Tốc độ: thường", "Speed: normal"))
+        mn.add(0, 4, 3, L.t("Tắt tiếng", "Mute audio"))
+            .setCheckable(true).setChecked(optMute)
+        mn.add(0, 5, 4, L.t("Đóng logo chìm", "Watermark logo"))
+            .setCheckable(true).setChecked(optWatermark)
+        mn.add(0, 6, 5, L.t("⇪  Xuất TẤT CẢ clip", "⇪  Export ALL clips"))
+        m.setOnMenuItemClickListener { item ->
+            when (item.itemId) {
+                1 -> optAvc = !optAvc
+                2 -> optFps60 = !optFps60
+                3 -> optSlowMo = !optSlowMo
+                4 -> optMute = !optMute
+                5 -> optWatermark = !optWatermark
+                6 -> {
+                    val clips = gallery.allClips()
+                    if (clips.isEmpty()) toast(L.t("Gallery trống", "Gallery is empty"))
+                    else startExport(clips)
+                }
+            }
+            updateExportSummary()
+            true
+        }
+        m.show()
     }
 
-    /** Preset bam tu hang nut: nap gia tri JSON vao slider + renderer */
+    private fun updateExportSummary() {
+        val parts = mutableListOf(
+            if (optAvc) "H.264 8-bit" else "HEVC 10-bit",
+            if (optFps60) "60 fps" else L.t("FPS nguồn", "source fps"),
+        )
+        if (optSlowMo) parts += "Slow-Mo x2"
+        if (optMute || optSlowMo) parts += L.t("Tắt tiếng", "muted")
+        if (optWatermark) parts += "Logo"
+        exportSummary.text = parts.joinToString("  ·  ")
+    }
+
     private fun applyPreset(index: Int) {
-        NativeBridge.setPreset(index)
         val states = runCatching { PresetLoader.states(this) }.getOrNull()
         val g = states?.getOrNull(index) ?: return
-        // Ban sao doc lap de slider chinh khong pha cache preset
         val copy = com.freedive.colorapp.grade.GradeState.fromJson(g.toJson())
-        sliders.setGrade(copy, pushAll = false)   // renderer da o che do preset
+        sliders.setGrade(copy, pushAll = false)
         currentUri?.let { gradeManager.put(it, copy) }
-        smartGuide.onGradeChanged(copy)           // Task S1 — guide bam theo preset
+        smartGuide.onGradeChanged(copy)
+        GradeBus.push(copy)
+        presetChips.forEachIndexed { i, ch -> Theme.setChipOn(this, ch, i == index) }
     }
 
-    /** Chon clip trong gallery: phat + ap grade rieng cua clip */
     private fun selectClip(uri: Uri) {
         currentUri = uri
         val g = gradeManager.stateFor(uri)
-        sliders.setGrade(g, pushAll = true)
-        lutLibrary.setSourceClip(uri)          // Task E4 — thumbnail live theo clip moi
-        startPlayback(uri)
+        sliders.setGrade(g, pushAll = false)
+        GradeBus.push(g)
+        lutLibrary.setSourceClip(uri)
+        keyframes.enabled = false
+        kfPlayChip.text = L.t("▶  Bật keyframe", "▶  Enable keyframes")
+        Theme.setChipOn(this, kfPlayChip, false, Theme.WARN)
+        gradePlayer.open(uri, autoPlay = true)   // thoi luong keyframe cap nhat o kfTick
     }
 
-    /** Task E1/E2/E3 — dong goi lua chon tren options bar thanh ExportConfig */
     private fun buildExportConfig() = com.freedive.colorapp.export.ExportConfig(
-        codec = if (optAvc.isChecked) com.freedive.colorapp.export.ExportCodec.AVC_8BIT
+        codec = if (optAvc) com.freedive.colorapp.export.ExportCodec.AVC_8BIT
                 else com.freedive.colorapp.export.ExportCodec.HEVC_MAIN10,
-        fpsOverride = if (optFps60.isChecked) 60 else null,
-        speed = if (optSlowMo.isChecked) com.freedive.colorapp.export.ExportSpeed.SLOWMO_50
+        fpsOverride = if (optFps60) 60 else null,
+        speed = if (optSlowMo) com.freedive.colorapp.export.ExportSpeed.SLOWMO_50
                 else com.freedive.colorapp.export.ExportSpeed.NORMAL,
-        muteAudio = optMute.isChecked || optSlowMo.isChecked,   // slow-mo ep mute
-        watermark = optWatermark.isChecked,
+        muteAudio = optMute || optSlowMo,
+        watermark = optWatermark,
     )
 
     /**
-     * Task E3 — nap logo watermark 1 lan: uu tien assets/watermark.png; neu khong
-     * co thi TU VE logo chu "FREEDIVE COLOR" nen mo tren Bitmap (khong can asset).
+     * GIAI DOAN 1: duong xuat file van dua tren VulkanRenderer, ma renderer do
+     * chi khoi tao khi co VideoPlayerView (da go khoi man hinh). Vi vay xuat
+     * file TAM THOI khong dung duoc — se thay bang Media3 Transformer o giai
+     * doan 2, dung chung GradeGlEffect/ClarityGlEffect voi preview nen mau
+     * xuat ra khop tuyet doi voi mau dang xem.
      */
-    private fun ensureWatermarkLoaded() {
-        if (watermarkLoaded) return
-        val bmp = runCatching {
-            assets.open("watermark.png").use { android.graphics.BitmapFactory.decodeStream(it) }
-        }.getOrNull() ?: run {
-            val w = 512; val h = 128
-            val b = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
-            val cv = android.graphics.Canvas(b)
-            val bg = android.graphics.Paint().apply {
-                color = android.graphics.Color.argb(90, 6, 12, 20); isAntiAlias = true
-            }
-            cv.drawRoundRect(0f, 0f, w.toFloat(), h.toFloat(), 24f, 24f, bg)
-            val p = android.graphics.Paint().apply {
-                color = android.graphics.Color.argb(235, 235, 243, 250)
-                textSize = 56f; isAntiAlias = true
-                typeface = android.graphics.Typeface.create(
-                    android.graphics.Typeface.SANS_SERIF, android.graphics.Typeface.BOLD)
-            }
-            cv.drawText("FREEDIVE COLOR", 28f, 82f, p)
-            b
-        }
-        val argb = android.graphics.Bitmap.createScaledBitmap(bmp, bmp.width, bmp.height, true)
-            .copy(android.graphics.Bitmap.Config.ARGB_8888, false)
-        val px = IntArray(argb.width * argb.height)
-        argb.getPixels(px, 0, argb.width, 0, 0, argb.width, argb.height)
-        val rgba = ByteArray(px.size * 4)
-        px.forEachIndexed { i, c ->
-            rgba[i * 4]     = ((c shr 16) and 0xFF).toByte()   // R (ARGB -> RGBA)
-            rgba[i * 4 + 1] = ((c shr 8) and 0xFF).toByte()    // G
-            rgba[i * 4 + 2] = (c and 0xFF).toByte()            // B
-            rgba[i * 4 + 3] = ((c shr 24) and 0xFF).toByte()   // A
-        }
-        watermarkLoaded = NativeBridge.setWatermarkImage(rgba, argb.width, argb.height)
-        if (!watermarkLoaded) toast("Nap logo loi: ${NativeBridge.lastError()}")
-    }
-
-    private fun startPlayback(uri: Uri) {
-        engine?.release()
-        keyframes.enabled = false
-        val e = MediaCodecEngine(this)
-        if (!e.open(uri)) return toast("File khong co track HEVC")
-        if (!e.isMain10) toast("Canh bao: video khong phai Main10 (D-Log M?)")
-        keyframes.setDuration(e.durationUs)
-        e.onFrameTime = { pts -> keyframes.onFrame(pts) }   // noi suy grade theo do sau
-        engine = e
-        if (playerView.holder.surface?.isValid == true) e.start()
-        else playerView.onSurfaceReady = { e.start() }
-    }
-
-    /** Task 4: dung preview (encoder can renderer doc quyen) roi chay batch nen */
     private fun startExport(clips: List<Uri>) {
-        if (batchExporter.running) return toast("Dang xuat — cho xong da")
-        batchExporter.config = buildExportConfig()          // Task E1/E2/E3 — tu options bar
-        engine?.release(); engine = null                    // preview dung lai
-        exportBar.visibility = android.view.View.VISIBLE
-        batchExporter.onProgress = { i, n, pct ->
-            runOnUiThread {
-                exportBar.progress = pct
-                title = "Xuat clip $i/$n — $pct%"
-            }
-        }
-        batchExporter.onFinished = { files ->
-            runOnUiThread {
-                exportBar.visibility = android.view.View.GONE
-                title = "Freediving Color"
-                toast("Xuat xong ${files.size} clip vao thu muc Movies cua app")
-                currentUri?.let { selectClip(it) }          // phat lai preview
-            }
-        }
-        batchExporter.exportAll(clips)
+        toast(L.t("Xuất file đang được chuyển sang Media3 Transformer — chưa dùng được ở bản này",
+                  "Export is being migrated to Media3 Transformer — not available in this build"))
+    }
+
+    override fun onPause() {
+        gradePlayer.player.playWhenReady = false
+        draftStore.saveNow(gallery.allClips(), gradeManager.snapshot())
+        super.onPause()
     }
 
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
-    private fun rowLp(w: Float) = LinearLayout.LayoutParams(0, wc(), w)
-    private fun mp() = FrameLayout.LayoutParams(mpv(), mpv())
     private fun mpv() = LinearLayout.LayoutParams.MATCH_PARENT
     private fun wc() = LinearLayout.LayoutParams.WRAP_CONTENT
 
     override fun onDestroy() {
-        engine?.release()
+        kfHandler.removeCallbacks(kfTick)
+        gradePlayer.release()
         gallery.releaseThreads()
         super.onDestroy()
     }

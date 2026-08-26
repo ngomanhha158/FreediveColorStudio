@@ -65,6 +65,9 @@ public:
     void destroy();
 
     bool submitDecodedFrame(AHardwareBuffer* buffer, std::string* err);
+    // Ve LAI frame decode gan nhat voi tham so grade hien tai (dung khi player
+    // dang TAM DUNG ma nguoi dung keo slider mau).
+    bool redraw(std::string* err);
     bool uploadLut(const CubeLut& lut, std::string* err);
 
     // ---- TASK 4.1 — EXPORT MODE (render offscreen vao encoder surface) ----

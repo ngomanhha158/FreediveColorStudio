@@ -675,6 +675,13 @@ bool VulkanRenderer::submitDecodedFrame(AHardwareBuffer* buf, std::string* err) 
     return true;
 }
 
+// Ve lai frame hien co (srcView_ van con song trong ahbCache_) — cho phep
+// grade tren mot frame dung yen ma preview van cap nhat.
+bool VulkanRenderer::redraw(std::string* err) {
+    if (!srcImage_) { if (err) *err = "Chua co frame de ve lai"; return false; }
+    return renderFrame(err);
+}
+
 // TASK 4.2 — giai phong toan bo import cache (giua cac clip / khi doi format /
 // sau moi muc trong hang doi batch de RAM/VRAM khong phinh)
 void VulkanRenderer::clearAhbCache() {

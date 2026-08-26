@@ -17,6 +17,13 @@ object NativeBridge {
     /** Frame 10-bit tu ImageReader — zero-copy sang Vulkan */
     external fun submitFrame(hardwareBuffer: HardwareBuffer): Boolean
 
+    /**
+     * Ve LAI frame decode gan nhat voi tham so grade hien tai.
+     * Bat buoc khi player TAM DUNG: khong co frame moi nao den de kich hoat ve,
+     * nen keo slider mau se khong doi gi neu khong goi ham nay.
+     */
+    external fun redraw(): Boolean
+
     external fun loadLutFromPath(path: String): Boolean
     external fun setPreset(index: Int)
     external fun setAntiGreen(strength: Float)

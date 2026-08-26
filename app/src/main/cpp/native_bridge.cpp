@@ -7,6 +7,7 @@
 #include <android/hardware_buffer_jni.h>
 #include <android/native_window_jni.h>
 #include <memory>
+#include <mutex>
 #include <vector>
 #include <string>
 
@@ -15,6 +16,7 @@
 
 namespace {
 std::unique_ptr<fdc::VulkanRenderer> gRenderer;   // 1 instance cho player chinh
+std::mutex gRenderMutex;                          // submitFrame (decode thread) vs redraw (UI thread)
 std::string gLastError;
 jstring toJstr(JNIEnv* env, const std::string& s) { return env->NewStringUTF(s.c_str()); }
 }  // namespace
@@ -45,11 +47,21 @@ Java_com_freedive_colorapp_NativeBridge_surfaceDestroyed(JNIEnv*, jobject) {
 JNIEXPORT jboolean JNICALL
 Java_com_freedive_colorapp_NativeBridge_submitFrame(
         JNIEnv* env, jobject, jobject hardwareBuffer) {
+    std::lock_guard<std::mutex> lk(gRenderMutex);
     if (!gRenderer) return JNI_FALSE;
     AHardwareBuffer* ahb = AHardwareBuffer_fromHardwareBuffer(env, hardwareBuffer);
     if (!ahb) { gLastError = "HardwareBuffer null"; return JNI_FALSE; }
     if (!gRenderer->submitDecodedFrame(ahb, &gLastError)) return JNI_FALSE;
     return gRenderer->renderFrame(&gLastError) ? JNI_TRUE : JNI_FALSE;
+}
+
+// Ve lai frame gan nhat — goi tu UI thread khi player dang tam dung va nguoi
+// dung dang keo slider mau (khong co frame moi nao den de kich hoat ve).
+JNIEXPORT jboolean JNICALL
+Java_com_freedive_colorapp_NativeBridge_redraw(JNIEnv*, jobject) {
+    std::lock_guard<std::mutex> lk(gRenderMutex);
+    if (!gRenderer) return JNI_FALSE;
+    return gRenderer->redraw(&gLastError) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL

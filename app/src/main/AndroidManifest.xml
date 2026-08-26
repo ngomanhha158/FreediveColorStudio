@@ -7,6 +7,8 @@
                   android:version="0x403000" android:required="true" />
 
     <application
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:label="Freediving Color"
         android:hardwareAccelerated="true"
         android:largeHeap="true"
