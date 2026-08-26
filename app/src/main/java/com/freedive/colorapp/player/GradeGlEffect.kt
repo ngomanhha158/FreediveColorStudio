@@ -110,12 +110,19 @@ class GradeShaderProgram(
 
             program.bindAttributesAndUniforms()
 
-            // LUT 3D phai gan thu cong: GlProgram khong biet sampler3D
+            // LUT 3D phai gan thu cong: GlProgram khong biet sampler3D.
+            // GlProgram.programId la private, nen lay id chuong trinh dang duoc
+            // dung tu chinh GL (program.use() vua goi o tren) — khong phu thuoc
+            // vao chi tiet noi bo cua Media3.
             if (lutTexId != 0) {
                 GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + LUT_TEX_UNIT)
                 GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, lutTexId)
-                val loc = GLES20.glGetUniformLocation(program.programId, "uLutTex")
-                if (loc >= 0) GLES20.glUniform1i(loc, LUT_TEX_UNIT)
+                val pid = IntArray(1)
+                GLES20.glGetIntegerv(GLES20.GL_CURRENT_PROGRAM, pid, 0)
+                if (pid[0] != 0) {
+                    val loc = GLES20.glGetUniformLocation(pid[0], "uLutTex")
+                    if (loc >= 0) GLES20.glUniform1i(loc, LUT_TEX_UNIT)
+                }
             }
 
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, /* first= */ 0, /* count= */ 4)
