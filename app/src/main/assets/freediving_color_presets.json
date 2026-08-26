@@ -1,0 +1,239 @@
+{
+  "schema_version": "1.0",
+  "app": "Freediving Color",
+  "generated": "2026-08-18",
+  "source_spec": "COLOR GRADING PRESETS SPECIFICATION FOR FREEDIVING FOOTAGE (DJI Action D-Log M 10-bit)",
+
+  "pipeline": {
+    "input_profile": "dji_dlog_m_10bit",
+    "layer_order": ["pre_lut", "lut_engine", "post_lut"],
+    "cst": "dlog_m_to_rec709",
+    "lut_format": ".cube (33x33x33 | 65x65x65)",
+    "lut_interpolation": "tetrahedral",
+    "render_api": "vulkan_compute | gles_310_fragment"
+  },
+
+  "conventions": {
+    "white_balance_temperature": "float -1.0..+1.0 | am(-)=lanh/xanh duong, duong(+)=am ap/vang",
+    "tint": "float -1.0..+1.0 | am(-)=green, duong(+)=magenta",
+    "exposure_ev": "float, don vi EV stop",
+    "contrast": "float -1.0..+1.0 | +0.15 = +15% theo spec",
+    "shadows_lift / highlights": "float -1.0..+1.0 | spec % / 100",
+    "red_channel_recovery": "float 0.0..1.0 | spec % / 100",
+    "lut_intensity": "float 0.0..1.0 (LUT Mix slider)",
+    "hsl.hue_deg": "do xoay hue (degrees), am = xoay ve phia cyan/teal",
+    "hsl.saturation / hsl.luma": "float -1.0..+1.0",
+    "hsl_bands": "7 kenh: red(0), orange(30), yellow(60), green(120), cyan(180), blue(240), magenta(300) — mo rong tu 6 kenh trong kien truc de giu nguyen gia tri Orange cua spec (DEVIATION ghi nhan)",
+    "calibration_note": "Cac gia tri dinh tinh trong spec (High Warm, High Magenta, slightly...) duoc luong hoa theo thang chuan duoi day va co the tinh chinh khi test tren footage that: High=0.50-0.60, Moderate=0.30-0.40, Slight=0.10"
+  },
+
+  "global_controls": {
+    "anti_green": {
+      "description": "Khu am xanh la (kieu Anti-Green cua LumaFusion) — slider toan cuc, xep chong len moi preset, khong thuoc tham so preset",
+      "type": "slider",
+      "range": [0.0, 1.0],
+      "default": 0.0,
+      "quick_toggle_value": 0.5,
+      "pipeline_stage": "pre_lut — sau White Balance/Tint, truoc Red Channel Recovery",
+      "shader_uniform": "uAntiGreen (freediving_color.frag)",
+      "algorithm": "Thich nghi theo pixel, bao toan luma: gExcess = max(G - max(R,B), 0); G' = G - strength*gExcess; scale toan pixel ve luma goc. Chi tac dong pixel co G troi (green cast), khong cham pixel xanh duong thuan.",
+      "recommended_per_preset": {
+        "phu_quoc_deep_emerald": 0.15,
+        "tropical_cyan": 0.30,
+        "true_deep_sea_blue": 0.0,
+        "indo_cinematic_moody": 0.20,
+        "social_media_vibrant": 0.25
+      },
+      "recommended_note": "Gia tri khoi diem de xuat (preset Phu Quoc da bu green manh bang Tint +0.50 nen chi can thap; Deep Sea Blue khong co green cast nen de 0) — tinh chinh khi test footage that",
+      "ui_hint": "Chip bat/tat nhanh 'Anti-Green' (dat 0.5) + slider tinh chinh trong panel Layer 1; haptic tick tai moc 0"
+    },
+    "layer_visibility": {
+      "description": "Icon con mat tren tung layer (Core Features #1): bypass hieu ung de so sanh Before/After ma KHONG mat gia tri slider",
+      "shader_uniforms": ["uLayer1On", "uLayer2On", "uLayer3On"],
+      "default": [true, true, true]
+    }
+  },
+
+  "keyframing": {
+    "description": "Depth-based Keyframing (Core Features #4): noi suy tham so grade frame-by-frame theo tien trinh clip — vi du tho lan di len tu 25m ve mat nuoc",
+    "engine": "Noi suy TUYEN TINH phia CPU bang fdc::Evaluate/Lerp (freediving_color_presets.h), day ket qua xuong GPU qua UBO moi frame; shader khong doi",
+    "keyframe_schema": {
+      "time_sec": "double — vi tri keyframe tren clip",
+      "params": "toan bo pre_lut + lut_engine.intensity + post_lut + anti_green deu keyframe duoc; truong bool giu gia tri keyframe dau"
+    },
+    "example_from_spec": [
+      { "time_sec": 0.0,  "note": "day cua chuyen lan",  "pre_lut": { "red_channel_recovery": 0.80 } },
+      { "time_sec": 45.0, "note": "len toi mat nuoc",    "pre_lut": { "red_channel_recovery": 0.10 } }
+    ]
+  },
+
+  "presets": [
+    {
+      "index": 0,
+      "id": "phu_quoc_deep_emerald",
+      "display_name": "Phu Quoc Deep Emerald",
+      "environment": { "depth_m": [20, 25], "notes": "Nuoc sau, mat do plankton cao, am xanh la/vang nang, mat pho do nghiem trong, anh sang yeu" },
+      "aesthetic_goal": "Phuc hoi tone da, khong sinh nhieu magenta o vung toi",
+      "pre_lut": {
+        "white_balance_temperature": 0.60,
+        "tint": 0.50,
+        "exposure_ev": 0.0,
+        "contrast": 0.0,
+        "shadows_lift": 0.15,
+        "highlights": 0.0,
+        "red_channel_recovery": 0.90,
+        "red_channel_recovery_range": [0.80, 0.95],
+        "magenta_shadow_guard": true
+      },
+      "lut_engine": { "intensity": 1.00 },
+      "post_lut": {
+        "global_saturation": 0.0,
+        "clarity": 0.0,
+        "skin_tone_protection": false,
+        "shadow_tint_rgb": [0.0, 0.0, 0.0],
+        "hsl": {
+          "red":     { "hue_deg": 0, "saturation": 0.20, "luma": 0.0 },
+          "orange":  { "hue_deg": 0, "saturation": 0.25, "luma": 0.0 },
+          "yellow":  { "hue_deg": 0, "saturation": 0.0,  "luma": 0.0 },
+          "green":   { "hue_deg": 0, "saturation": 0.0,  "luma": -0.20 },
+          "cyan":    { "hue_deg": 0, "saturation": 0.0,  "luma": 0.0 },
+          "blue":    { "hue_deg": 0, "saturation": 0.0,  "luma": 0.0 },
+          "magenta": { "hue_deg": 0, "saturation": 0.0,  "luma": 0.0 }
+        }
+      }
+    },
+    {
+      "index": 1,
+      "id": "tropical_cyan",
+      "display_name": "Tropical Cyan (Nha Trang / Quy Nhon)",
+      "environment": { "depth_m": [5, 10], "notes": "Nuoc nong, tam nhin cao, nang xuyen manh; mau nuoc tu nhien Cyan/Teal (Hon Mun, Bai Dai)" },
+      "aesthetic_goal": "Trong veo, ruc ro chat nghi duong, highlight rolloff muot",
+      "pre_lut": {
+        "white_balance_temperature": -0.10,
+        "tint": 0.10,
+        "exposure_ev": 0.0,
+        "contrast": 0.0,
+        "shadows_lift": 0.0,
+        "highlights": -0.20,
+        "red_channel_recovery": 0.0,
+        "magenta_shadow_guard": false
+      },
+      "lut_engine": { "intensity": 1.00 },
+      "post_lut": {
+        "global_saturation": 0.0,
+        "clarity": 0.0,
+        "skin_tone_protection": false,
+        "shadow_tint_rgb": [0.0, 0.0, 0.0],
+        "hsl": {
+          "red":     { "hue_deg": 0,   "saturation": 0.0,  "luma": 0.0 },
+          "orange":  { "hue_deg": 0,   "saturation": 0.0,  "luma": 0.0 },
+          "yellow":  { "hue_deg": 0,   "saturation": 0.0,  "luma": 0.0 },
+          "green":   { "hue_deg": 0,   "saturation": 0.0,  "luma": 0.0 },
+          "cyan":    { "hue_deg": 0,   "saturation": 0.15, "luma": -0.05 },
+          "blue":    { "hue_deg": -10, "saturation": 0.0,  "luma": 0.0 },
+          "magenta": { "hue_deg": 0,   "saturation": 0.0,  "luma": 0.0 }
+        }
+      }
+    },
+    {
+      "index": 2,
+      "id": "true_deep_sea_blue",
+      "display_name": "True Deep Sea Blue (Phu Quy / Philippines)",
+      "environment": { "depth_m": [30, 999], "notes": "Nuoc pelagic cuc trong, tam nhin 30m+, pho xanh duong sau tu nhien" },
+      "aesthetic_goal": "Chat dien anh 'Deep Sea Blue' thuan khiet, sang trong, chuyen nghiep",
+      "pre_lut": {
+        "white_balance_temperature": 0.0,
+        "tint": 0.0,
+        "exposure_ev": 0.0,
+        "contrast": 0.15,
+        "shadows_lift": 0.0,
+        "highlights": 0.0,
+        "red_channel_recovery": 0.0,
+        "magenta_shadow_guard": false
+      },
+      "lut_engine": { "intensity": 1.00 },
+      "post_lut": {
+        "global_saturation": 0.0,
+        "clarity": 0.0,
+        "skin_tone_protection": false,
+        "shadow_tint_rgb": [0.0, 0.0, 0.0],
+        "hsl": {
+          "red":     { "hue_deg": 0, "saturation": 0.0,   "luma": 0.0 },
+          "orange":  { "hue_deg": 0, "saturation": 0.0,   "luma": 0.10 },
+          "yellow":  { "hue_deg": 0, "saturation": 0.0,   "luma": 0.0 },
+          "green":   { "hue_deg": 0, "saturation": 0.0,   "luma": 0.0 },
+          "cyan":    { "hue_deg": 0, "saturation": 0.0,   "luma": 0.0 },
+          "blue":    { "hue_deg": 0, "saturation": -0.10, "luma": -0.15 },
+          "magenta": { "hue_deg": 0, "saturation": 0.0,   "luma": 0.0 }
+        }
+      }
+    },
+    {
+      "index": 3,
+      "id": "indo_cinematic_moody",
+      "display_name": "Indo Cinematic Moody (Bali / Lombok / Sumbawa)",
+      "environment": { "depth_m": null, "notes": "Day cat nui lua toi, vach drop-off kich tinh, dong chay kho luong, nhiet do nuoc pha tron" },
+      "aesthetic_goal": "Chat phim, moody, hoi desaturate, dai tuong phan rong (HDR) — hop storytelling/reel cam xuc",
+      "pre_lut": {
+        "white_balance_temperature": 0.0,
+        "tint": 0.0,
+        "exposure_ev": -0.5,
+        "contrast": -0.10,
+        "shadows_lift": 0.0,
+        "highlights": 0.0,
+        "red_channel_recovery": 0.40,
+        "magenta_shadow_guard": false
+      },
+      "lut_engine": { "intensity": 1.00 },
+      "post_lut": {
+        "global_saturation": -0.15,
+        "clarity": 0.0,
+        "skin_tone_protection": false,
+        "shadow_tint_rgb": [-0.02, 0.015, 0.02],
+        "hsl": {
+          "red":     { "hue_deg": 0,   "saturation": 0.0,   "luma": 0.0 },
+          "orange":  { "hue_deg": 0,   "saturation": 0.0,   "luma": 0.0 },
+          "yellow":  { "hue_deg": 0,   "saturation": 0.0,   "luma": 0.0 },
+          "green":   { "hue_deg": 0,   "saturation": 0.0,   "luma": 0.0 },
+          "cyan":    { "hue_deg": -8,  "saturation": -0.20, "luma": 0.0 },
+          "blue":    { "hue_deg": -10, "saturation": -0.20, "luma": 0.0 },
+          "magenta": { "hue_deg": 0,   "saturation": 0.0,   "luma": 0.0 }
+        }
+      }
+    },
+    {
+      "index": 4,
+      "id": "social_media_vibrant",
+      "display_name": "Social Media Vibrant (Commercial Tour Standard)",
+      "environment": { "depth_m": null, "notes": "Preset van nang cho moi dieu kien nuoc trong" },
+      "aesthetic_goal": "Bat mat, tuoi sang, than thien CapCut — khach tour dang mang xa hoi ngay; tone da nay no, nuoc song dong",
+      "pre_lut": {
+        "white_balance_temperature": 0.0,
+        "tint": 0.0,
+        "exposure_ev": 0.2,
+        "contrast": 0.0,
+        "shadows_lift": 0.0,
+        "highlights": 0.0,
+        "red_channel_recovery": 0.60,
+        "magenta_shadow_guard": false
+      },
+      "lut_engine": { "intensity": 0.85, "intensity_note": "Grade Co LUT clamp 85% de giu tu nhien" },
+      "post_lut": {
+        "global_saturation": 0.10,
+        "clarity": 0.15,
+        "skin_tone_protection": true,
+        "skin_tone_protection_note": "Khoa hue-shift va gioi han sat-shift trong dai hue 15..45 do (Orange/Red) de bao ve tone da",
+        "shadow_tint_rgb": [0.0, 0.0, 0.0],
+        "hsl": {
+          "red":     { "hue_deg": 0, "saturation": 0.0, "luma": 0.0 },
+          "orange":  { "hue_deg": 0, "saturation": 0.0, "luma": 0.0 },
+          "yellow":  { "hue_deg": 0, "saturation": 0.0, "luma": 0.0 },
+          "green":   { "hue_deg": 0, "saturation": 0.0, "luma": 0.0 },
+          "cyan":    { "hue_deg": 0, "saturation": 0.0, "luma": 0.0 },
+          "blue":    { "hue_deg": 0, "saturation": 0.0, "luma": 0.0 },
+          "magenta": { "hue_deg": 0, "saturation": 0.0, "luma": 0.0 }
+        }
+      }
+    }
+  ]
+}

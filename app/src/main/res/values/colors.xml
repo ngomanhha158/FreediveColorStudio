@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- TASK 5.1 — bang mau "Ocean" (Material 3 dark) cua Freediving Color -->
+<resources>
+    <color name="ocean_primary">#3987E5</color>        <!-- xanh nuoc -->
+    <color name="ocean_on_primary">#FFFFFF</color>
+    <color name="ocean_secondary">#199E70</color>      <!-- lagoon -->
+    <color name="ocean_surface">#121418</color>        <!-- nen panel -->
+    <color name="ocean_background">#0A1220</color>     <!-- nen sau -->
+    <color name="ocean_on_surface">#E6EDF6</color>
+    <color name="ocean_outline">#3A4250</color>
+</resources>

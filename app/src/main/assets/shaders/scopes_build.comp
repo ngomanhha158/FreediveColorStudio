@@ -1,0 +1,47 @@
+#version 450
+/*
+ * ============================================================================
+ *  TASK 2.4 — SCOPES BUILD (COMPUTE) · dem bin Vectorscope + Luma Waveform
+ *  Doc anh SAU grade (midB), subsample 4x4 de khong anh huong FPS, atomicAdd
+ *  vao SSBO. Pass composite se ve scope tu SSBO nay (scopes_popup.frag).
+ * ============================================================================
+ */
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) uniform sampler2D uGraded;    // midB — anh da grade
+
+layout(set = 0, binding = 1) buffer ScopeBins {
+    uint vecBins[256 * 256];   // Vectorscope: [cr*256 + cb]
+    uint wfBins [256 * 256];   // Waveform:    [col*256 + luma]
+} bins;
+
+layout(push_constant) uniform ScopePC {
+    int width;      // kich thuoc anh nguon
+    int height;
+    int mode;       // 1 = Vectorscope, 2 = Waveform (0 = tat, khong dispatch)
+    int _pad;
+} pc;
+
+const int SUB = 4;              // subsample: lay 1 pixel moi o 4x4
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 p = gid * SUB;
+    if (p.x >= pc.width || p.y >= pc.height) return;
+
+    vec3 c = texelFetch(uGraded, p, 0).rgb;
+    float y = dot(c, vec3(0.2126, 0.7152, 0.0722));
+
+    if (pc.mode == 1) {
+        // BT.709: Cb/Cr trong [-0.5, 0.5]
+        float cb = (c.b - y) / 1.8556;
+        float cr = (c.r - y) / 1.5748;
+        int bx = clamp(int((cb + 0.5) * 255.0 + 0.5), 0, 255);
+        int by = clamp(int((cr + 0.5) * 255.0 + 0.5), 0, 255);
+        atomicAdd(bins.vecBins[by * 256 + bx], 1u);
+    } else {
+        int col  = clamp(int(float(p.x) / float(pc.width) * 255.0), 0, 255);
+        int ybin = clamp(int(y * 255.0 + 0.5), 0, 255);
+        atomicAdd(bins.wfBins[col * 256 + ybin], 1u);
+    }
+}

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- TASK 5.1 — Material 3 dark theme (QD12: MDC theme tren View hien co,
+     khong viet lai bang Compose — xem bao-cao-tuan5.md) -->
+<resources>
+    <style name="Theme.FreediveColor" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">@color/ocean_primary</item>
+        <item name="colorOnPrimary">@color/ocean_on_primary</item>
+        <item name="colorSecondary">@color/ocean_secondary</item>
+        <item name="android:colorBackground">@color/ocean_background</item>
+        <item name="colorSurface">@color/ocean_surface</item>
+        <item name="colorOnSurface">@color/ocean_on_surface</item>
+        <item name="colorOutline">@color/ocean_outline</item>
+        <item name="android:statusBarColor">@color/ocean_background</item>
+        <item name="android:navigationBarColor">@color/ocean_background</item>
+    </style>
+</resources>
