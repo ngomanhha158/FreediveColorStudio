@@ -36,6 +36,27 @@ jobs:
             find app/src/main/java -name '*.kt' | sort
           fi
 
+      # ----------------------------------------------------------------------
+      # Kiem tra shader GLSL. Gradle KHONG the bat loi shader: GLSL chi duoc
+      # bien dich luc chay, tren GPU cua may that. Build xanh van co the ra mot
+      # app man hinh den. glslangValidator bien dich offline nen bat duoc ngay.
+      # ----------------------------------------------------------------------
+      - name: Validate GLSL shaders
+        run: |
+          set -e
+          sudo apt-get update -qq
+          sudo apt-get install -y glslang-tools -qq
+          fail=0
+          for f in app/src/main/assets/shaders/gl/*.glsl; do
+            case "$f" in *vertex*) st=vert ;; *) st=frag ;; esac
+            if glslangValidator -S $st "$f" > /tmp/glsl.txt 2>&1; then
+              echo "OK   $f"
+            else
+              echo "LOI  $f"; cat /tmp/glsl.txt; fail=1
+            fi
+          done
+          exit $fail
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
