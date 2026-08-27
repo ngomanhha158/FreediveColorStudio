@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: write        # chi de tao Release chua APK + log
 
 jobs:
   build:
@@ -13,21 +13,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # --- B1: neu co patch.zip o goc repo thi giai nen de len ma nguon ---
-      - name: Apply patch.zip
+      # ----------------------------------------------------------------------
+      # Giai nen moi file .zip o goc repo DE LEN ma nguon, roi build ngay.
+      # KHONG commit, KHONG push: token cua workflow thuong chi co quyen doc,
+      # va moi lan "git push" that bai la ca job chet truoc khi kip build.
+      # Zip cu nam lai trong repo cung khong sao — moi lan chay lai deu ap lai.
+      # Thu tu ap: theo ten file (a -> z), nen zip moi hon nen dat ten sau.
+      # ----------------------------------------------------------------------
+      - name: Apply zip patches
         run: |
           set -e
-          if [ -f patch.zip ]; then
-            echo "Tim thay patch.zip — dang giai nen"
-            unzip -o patch.zip -d .
-            rm -f patch.zip
-            git config user.name "patch-bot"
-            git config user.email "patch-bot@users.noreply.github.com"
-            git add -A
-            git commit -m "Ap dung patch.zip" || echo "khong co thay doi"
-            git push
+          shopt -s nullglob
+          zips=(*.zip)
+          if [ ${#zips[@]} -eq 0 ]; then
+            echo "Khong co file .zip nao — build ma nguon hien tai"
           else
-            echo "Khong co patch.zip — build ma nguon hien tai"
+            for z in $(printf '%s\n' "${zips[@]}" | sort); do
+              echo "==> Giai nen $z"
+              unzip -o "$z" -d .
+            done
+            echo "--- Da ap xong, danh sach file nguon: ---"
+            find app/src/main/java -name '*.kt' | sort
           fi
 
       - uses: actions/setup-java@v4
@@ -51,7 +57,7 @@ jobs:
 
       - name: Trim log
         if: always()
-        run: tail -c 200000 build.log > build-tail.log || echo "no log" > build-tail.log
+        run: tail -c 200000 build.log > build-tail.log || echo "khong co build.log" > build-tail.log
 
       - name: Publish build log
         if: always()
